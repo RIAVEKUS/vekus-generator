@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vekus Server PN Generator</title>
+    <style>
+        * { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        h1 { color: #1a73e8; text-align: center; margin-bottom: 10px; }
+        .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .form-group { display: flex; flex-direction: column; }
+        label { font-weight: 600; margin-bottom: 5px; color: #333; }
+        select, input, textarea { padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; transition: border-color 0.3s; }
+        select:focus, input:focus, textarea:focus { outline: none; border-color: #1a73e8; }
+        .generate-btn { background: #1a73e8; color: white; padding: 15px 40px; border: none; border-radius: 8px; font-size: 18px; font-weight: 600; cursor: pointer; width: 100%; margin: 20px 0; transition: background 0.3s; }
+        .generate-btn:hover { background: #1557b0; }
+        .results { background: #f8f9fa; padding: 25px; border-radius: 12px; border-left: 5px solid #1a73e8; margin-top: 20px; }
+        .pn-code { font-family: 'Courier New', monospace; font-size: 24px; font-weight: bold; color: #1a73e8; background: white; padding: 15px; border-radius: 8px; text-align: center; margin: 15px 0; }
+        .description { background: white; padding: 20px; border-radius: 8px; font-size: 16px; line-height: 1.6; border-left: 4px solid #28a745; }
+        .tower-note { background: #fff3cd; padding: 12px; border-radius: 6px; border-left: 4px solid #ffc107; margin-top: 15px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖥️ Vekus Server PN Generator</h1>
+        <p class="subtitle">Автоматическая генерация артикулов и описаний серверов Vekus по комплектации</p>
+        
+        <form id="serverForm">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Платформа:</label>
+                    <select id="platform">
+                        <option value="VS">Supermicro (VS)</option>
+                        <option value="VG">Gigabyte (VG)</option>
+                        <option value="VA">ASUS (VA)</option>
+                        <option value="VC">Chenbro (VC)</option>
+                        <option value="VT">TTY (VT)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Категория:</label>
+                    <select id="category">
+                        <option value="C">Compute (C)</option>
+                        <option value="G">GPU (G)</option>
+                        <option value="S">Storage (S)</option>
+                        <option value="E">Edge (E)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Форм-фактор:</label>
+                    <select id="formfactor">
+                        <option value="R1U">Rack 1U (R1U)</option>
+                        <option value="R2U">Rack 2U (R2U)</option>
+                        <option value="R4U">Rack 4U (R4U)</option>
+                        <option value="T4U">Tower 4U (T4U)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>CPU (сокеты + поколение):</label>
+                    <select id="cpu">
+                        <option value="I23">Intel 2s, 3rd Gen (I23)</option>
+                        <option value="I24">Intel 2s, 4th Gen (I24)</option>
+                        <option value="I25">Intel 2s, 5th Gen (I25)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Диски (bays):</label>
+                    <select id="disks">
+                        <option value="D4M">4 bays Hybrid (D4M)</option>
+                        <option value="D8M">8 bays Hybrid (D8M)</option>
+                        <option value="C12M">12 bays Hybrid (C12M)</option>
+                        <option value="DM">8 bays Hybrid (DM)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Объем RAM (уровень):</label>
+                    <select id="ramLevel">
+                        <option value="1">64GB (Entry - 1)</option>
+                        <option value="2">192GB (Mid - 2)</option>
+                        <option value="3">512GB+ (High - 3)</option>
+                        <option value="4">1TB+ (Ultra - 4)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>PSU:</label>
+                    <select id="psu">
+                        <option value="H">2x Hot-swap (H)</option>
+                        <option value="D2">2x Redundant (D2)</option>
+                        <option value="D4">4x Redundant (D4)</option>
+                        <option value="F">1x Fixed (F)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>CPU модель:</label>
+                    <input type="text" id="cpuModel" placeholder="Xeon Gold 6336Y" value="Xeon Silver 4410Y">
+                </div>
+
+                <div class="form-group">
+                    <label>RAM (кол-во):</label>
+                    <input type="text" id="ramSpec" placeholder="1" value="1">
+                </div>
+		<div class="form-group">
+                    <label>RAM (объем):</label>
+                    <input type="text" id="ramSpec" placeholder="16Gb" value="16Gb">
+                </div>
+                <div class="form-group">
+                    <label>Storage:</label>
+                    <input type="text" id="storage" placeholder="2x4Tb SATA SSD" value="2x4Tb SATA SSD">
+                </div>
+
+                <div class="form-group">
+                    <label>GPU (если есть):</label>
+                    <input type="text" id="gpu" placeholder="2xRTX5090 32Gb" value="2xRTX5090 32Gb">
+                </div>
+
+                <div class="form-group">
+                    <label>Сеть LOM:</label>
+                    <input type="text" id="network" placeholder="2x10GbE Intel X550-AT2" value="2x10GbE Intel X550-AT2">
+                </div>
+            </div>
+
+            <button type="submit" class="generate-btn">🎯 СГЕНЕРИРОВАТЬ АРТИКУЛ И ОПИСАНИЕ</button>
+        </form>
+
+        <div id="results" class="results" style="display: none;">
+            <h3>✅ Результат генерации</h3>
+            <div id="pnCode" class="pn-code"></div>
+            <div id="description" class="description"></div>
+            <div id="towerNote" class="tower-note" style="display: none;"></div>
+            <button onclick="copyResults()" class="generate-btn" style="background: #28a745; margin-top: 15px;">📋 Копировать в буфер</button>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('serverForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            generateVekusConfig();
+        });
+
+        function generateVekusConfig() {
+            // Получаем значения формы
+            const platform = document.getElementById('platform').value;
+            const category = document.getElementById('category').value;
+            const formfactor = document.getElementById('formfactor').value;
+            const cpu = document.getElementById('cpu').value;
+            const disks = document.getElementById('disks').value;
+            const ramLevel = document.getElementById('ramLevel').value;
+            const psu = document.getElementById('psu').value;
+            const cpuModel = document.getElementById('cpuModel').value;
+            const ramSpec = document.getElementById('ramSpec').value;
+            const storage = document.getElementById('storage').value;
+            const gpu = document.getElementById('gpu').value || 'None';
+            const network = document.getElementById('network').value;
+
+            // Генерация артикула
+            const currentDate = new Date();
+            const month = currentDate.getMonth() + 1;
+            const day = currentDate.getDate();
+            const dateCode = `${month}${day}`;
+            
+            const pnCode = `${platform}${category}.${formfactor}.${cpu}.${disks}.${ramLevel}.${psu}/${dateCode}`;
+
+            // Определяем форм-фактор для описания
+            const formFactorText = formfactor.includes('T') ? 'Tower 4U' : formfactor.replace('R', '').toUpperCase();
+            const bayCount = disks.includes('C12') ? '12x 3.5"' : disks.includes('D8') ? '8x 3.5"' : '8x 3.5"';
+            
+            // CPU specs (упрощенные)
+            const cpuSpecs = '2.00-3.90GHz/30MB/12c/150W';
+            
+            // Формируем описание
+            let description = `Сервер Vekus "Кварк" ${formFactorText} ${bayCount} в составе: `;
+            description += `2x${cpuModel} (${cpuSpecs})/`;
+            description += `${ramSpec}/`;
+            description += `${storage}/`;
+            
+            if (category === 'G' && gpu !== 'None') {
+                description += `${gpu}/`;
+            }
+            
+            description += `RAID 9341-4i/${network} LOM/`;
+            if (gpu !== 'None') description += 'Astra Linux Special Edition/Kaspersky/';
+            description += `IPMI/2x2000W`;
+
+            // Показываем результаты
+            document.getElementById('pnCode').textContent = pnCode;
+            document.getElementById('description').textContent = description;
+            
+            // Показываем предупреждение для Tower
+            const towerNote = document.getElementById('towerNote');
+            if (formfactor.includes('T')) {
+                towerNote.textContent = '⚠️ Tower сервер — рельсы заказываются отдельно (MCP-190-741-xx)';
+                towerNote.style.display = 'block';
+            } else {
+                towerNote.style.display = 'none';
+            }
+            
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function copyResults() {
+            const pnCode = document.getElementById('pnCode').textContent;
+            const description = document.getElementById('description').textContent;
+            navigator.clipboard.writeText(`Артикул: ${pnCode}\n\n${description}`);
+            alert('✅ Артикул и описание скопированы в буфер обмена!');
+        }
+    </script>
+</body>
+</html>
