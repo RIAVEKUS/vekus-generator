@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vekus Server PN Generator v2</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         * { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; box-sizing: border-box; }
         body { max-width: 1400px; margin: 0 auto; padding: 20px; background: #f0f2f5; }
@@ -39,6 +40,9 @@
         .btn-remove:hover { background: #fce4ec; }
         .btn-clear { background: #fff3cd; color: #856404; }
         .btn-clear:hover { background: #ffe69c; }
+        .btn-import { background: #e6f4ea; color: #1e7e34; }
+        .btn-import:hover { background: #c8e6c9; }
+        .import-hint { font-size: 12px; color: #888; margin-top: 6px; }
 
         /* Результаты */
         .results { background: #f8f9fa; padding: 24px; border-radius: 12px; border-left: 5px solid #1a73e8; margin-top: 20px; display: none; }
@@ -85,8 +89,11 @@
 
         <div style="display: flex; gap: 12px; margin-bottom: 20px;">
             <button class="btn btn-add" onclick="addRow()" style="margin-bottom: 0;">+ Добавить комплектующую</button>
+            <button class="btn btn-import" onclick="document.getElementById('excelFileInput').click()">↥ Импорт из Excel</button>
+            <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="importFromExcel(event)">
             <button class="btn btn-clear" onclick="clearForm()">Очистить форму</button>
         </div>
+        <p class="import-hint">Формат Excel: колонки — Тип, Подтип, Артикул (или PN / Part Number), Описание (или Description / Наименование), Кол-во (или Qty). Тип можно не указывать — будет определён автоматически.</p>
 
         <button class="btn btn-generate" onclick="generateVekusConfig()">СГЕНЕРИРОВАТЬ АРТИКУЛ И ОПИСАНИЕ</button>
 
@@ -708,6 +715,140 @@
 
             document.getElementById('results').style.display = 'block';
             document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // =====================================================
+        // ИМПОРТ ИЗ EXCEL
+        // =====================================================
+
+        // Обратный словарь: метка → value (для колонки "Тип" в Excel)
+        const TYPE_LABEL_TO_VALUE = {};
+        COMPONENT_TYPES.forEach(t => {
+            TYPE_LABEL_TO_VALUE[t.label.toLowerCase()] = t.value;
+        });
+        // Дополнительные алиасы
+        const TYPE_ALIASES = {
+            'chassis': 'chassis', 'шасси': 'chassis', 'платформа': 'chassis', 'корпус': 'chassis',
+            'cpu': 'cpu', 'процессор': 'cpu', 'processor': 'cpu',
+            'cooler': 'cooler', 'кулер': 'cooler', 'cooling': 'cooler',
+            'ram': 'ram', 'память': 'ram', 'memory': 'ram', 'dimm': 'ram',
+            'storage': 'storage', 'накопитель': 'storage', 'диск': 'storage', 'hdd': 'storage', 'ssd': 'storage', 'nvme': 'storage', 'drive': 'storage',
+            'raid': 'raid', 'контроллер': 'raid', 'controller': 'raid',
+            'accessories': 'accessories', 'аксессуары': 'accessories', 'аксессуар': 'accessories', 'accessory': 'accessories',
+            'nic': 'nic', 'сетевой адаптер': 'nic', 'сетевой': 'nic', 'network': 'nic', 'ethernet': 'nic',
+            'gpu': 'gpu', 'видеокарта': 'gpu', 'graphics': 'gpu', 'accelerator': 'gpu',
+            'psu': 'psu', 'блок питания': 'psu', 'тип бп': 'psu', 'power supply': 'psu', 'power': 'psu',
+            'os': 'os', 'операционная система': 'os', 'ос': 'os', 'operating system': 'os',
+            'software': 'software', 'прикладное по': 'software', 'по': 'software', 'приложение': 'software',
+            'other': 'other', 'прочее': 'other', 'other': 'other', 'misc': 'other'
+        };
+
+        // Попытка определить тип по описанию (автоопределение если колонка Тип пуста)
+        function guessTypeFromDesc(desc, sku) {
+            const t = ((desc || '') + ' ' + (sku || '')).toLowerCase();
+            if (/\b(supermicro|dell|hp|hpe|lenovo|gigabyte|asus|huawei|xfusion|kaytus|gooxi)\b.*\bu\b|\b\du\b.*\b(server|platform|chassis)\b/i.test(t)) return 'chassis';
+            if (/\bxeon\b|\bepyc\b|\bthreadripper\b|\bprocessor\b|\bпроцессор\b/i.test(t)) return 'cpu';
+            if (/\bddr[345]\b|\bdimm\b|\brdimm\b|\blrdimm\b|\bпамять\b/i.test(t)) return 'ram';
+            if (/\bnvme\b|\bssd\b|\bhdd\b|\bsata\b.*\b(ssd|hdd|drive)\b|\bsas\b.*\b(ssd|hdd)\b/i.test(t)) return 'storage';
+            if (/\bmegaraid\b|\b9[0-9]{3}\b.*\b(raid|sas|sata)\b|\braid\b.*\bcontroller\b/i.test(t)) return 'raid';
+            if (/\bconnectx\b|\bmlx\b|\bmellanox\b|\b(25|100|40|10)gbe\b|\b(sfp|qsfp)\b/i.test(t)) return 'nic';
+            if (/\bh100\b|\ba100\b|\brtx\b|\bv100\b|\ba10\b|\bblackwell\b/i.test(t)) return 'gpu';
+            if (/\bpsu\b|\bpower supply\b|\bwatt\b|\b[0-9]+w\b.*\bpsu\b/i.test(t)) return 'psu';
+            if (/\bastra linux\b|\bwindows server\b|\bwindows\b.*\bpro\b|\bred os\b|\bред ос\b/i.test(t)) return 'os';
+            if (/\bkaspersky\b|\bdallas lock\b|\bantivirus\b/i.test(t)) return 'software';
+            if (/\brails?\b|\bcable\b|\bкабель\b|\bбатарея\b|\bbbu\b/i.test(t)) return 'accessories';
+            return 'other';
+        }
+
+        // Поиск нужной колонки среди заголовков Excel (нечёткий поиск)
+        function findCol(headers, ...candidates) {
+            const normalized = headers.map(h => (h || '').toString().toLowerCase().trim());
+            for (const cand of candidates) {
+                const idx = normalized.findIndex(h => h === cand.toLowerCase() || h.includes(cand.toLowerCase()));
+                if (idx !== -1) return headers[idx]; // возвращаем оригинальный ключ
+            }
+            return null;
+        }
+
+        function importFromExcel(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            event.target.value = ''; // сбрасываем, чтобы можно было повторно загрузить тот же файл
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+                    if (!rows.length) {
+                        alert('Файл пуст или не содержит данных.');
+                        return;
+                    }
+
+                    const headers = Object.keys(rows[0]);
+
+                    // Ищем нужные колонки
+                    const colType    = findCol(headers, 'Тип', 'Type', 'Категория', 'Category', 'Тип комплектующей');
+                    const colSubtype = findCol(headers, 'Подтип', 'Subtype', 'Sub-type');
+                    const colSku     = findCol(headers, 'Артикул', 'Арт', 'PartNumber', 'Part Number', 'Part No', 'PN', 'SKU', 'Партномер', 'Парт-номер', 'Арт.');
+                    const colDesc    = findCol(headers, 'Описание', 'Description', 'Наименование', 'Название', 'Desc', 'Name', 'Товар');
+                    const colQty     = findCol(headers, 'Кол-во', 'Количество', 'Qty', 'Quantity', 'Count', 'Кол.', 'Кол', 'Кол-во, шт');
+
+                    if (!colDesc && !colSku) {
+                        alert('Не удалось найти колонки с описанием или артикулом.\nПроверьте, что в файле есть колонки: Описание (или Description / Наименование) и Артикул (или PN / SKU).');
+                        return;
+                    }
+
+                    let imported = 0;
+                    rows.forEach(row => {
+                        const sku  = colSku  ? String(row[colSku]  || '').trim() : '';
+                        const desc = colDesc ? String(row[colDesc] || '').trim() : '';
+                        const qty  = colQty  ? parseInt(row[colQty]) || 1 : 1;
+                        const subtype = colSubtype ? String(row[colSubtype] || '').trim().toLowerCase() : '';
+
+                        // Пропускаем пустые строки
+                        if (!sku && !desc) return;
+
+                        // Определяем тип
+                        let typeVal = 'other';
+                        if (colType) {
+                            const raw = String(row[colType] || '').trim().toLowerCase();
+                            typeVal = TYPE_ALIASES[raw] || TYPE_LABEL_TO_VALUE[raw] || guessTypeFromDesc(desc, sku);
+                        } else {
+                            typeVal = guessTypeFromDesc(desc, sku);
+                        }
+
+                        // Определяем подтип накопителя
+                        let subtypeVal = '';
+                        if (typeVal === 'storage' && subtype) {
+                            const SUBTYPE_ALIASES = {
+                                'nvme': 'nvme', 'нвме': 'nvme',
+                                'ssd sata': 'ssd_sata', 'sata ssd': 'ssd_sata', 'sata': 'ssd_sata',
+                                'ssd sas': 'ssd_sas', 'sas ssd': 'ssd_sas',
+                                'hdd sata': 'hdd_sata',
+                                'hdd sas': 'hdd_sas', 'sas': 'hdd_sas',
+                            };
+                            subtypeVal = SUBTYPE_ALIASES[subtype] || '';
+                        }
+
+                        addRow({ type: typeVal, subtype: subtypeVal, sku, desc, qty });
+                        imported++;
+                    });
+
+                    if (imported === 0) {
+                        alert('Строки не найдены. Убедитесь, что в файле есть данные с заполненными колонками.');
+                    } else {
+                        alert(`Импортировано строк: ${imported}`);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert('Ошибка при чтении файла: ' + err.message);
+                }
+            };
+            reader.readAsArrayBuffer(file);
         }
 
         // =====================================================
