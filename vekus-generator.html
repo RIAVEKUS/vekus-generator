@@ -37,6 +37,8 @@
         .btn-copy:hover { background: #218838; }
         .btn-remove { background: none; border: none; color: #dc3545; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; transition: background 0.2s; }
         .btn-remove:hover { background: #fce4ec; }
+        .btn-clear { background: #fff3cd; color: #856404; }
+        .btn-clear:hover { background: #ffe69c; }
 
         /* Результаты */
         .results { background: #f8f9fa; padding: 24px; border-radius: 12px; border-left: 5px solid #1a73e8; margin-top: 20px; display: none; }
@@ -81,7 +83,10 @@
             </table>
         </div>
 
-        <button class="btn btn-add" onclick="addRow()">+ Добавить комплектующую</button>
+        <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+            <button class="btn btn-add" onclick="addRow()" style="margin-bottom: 0;">+ Добавить комплектующую</button>
+            <button class="btn btn-clear" onclick="clearForm()">Очистить форму</button>
+        </div>
 
         <button class="btn btn-generate" onclick="generateVekusConfig()">СГЕНЕРИРОВАТЬ АРТИКУЛ И ОПИСАНИЕ</button>
 
@@ -689,6 +694,16 @@
 
             document.getElementById('results').style.display = 'block';
             document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // =====================================================
+        // ОЧИСТКА ФОРМЫ
+        // =====================================================
+        function clearForm() {
+            document.getElementById('configBody').innerHTML = '';
+            document.getElementById('results').style.display = 'none';
+            rowCounter = 0;
+            addRow();
         }
 
         // =====================================================
