@@ -342,49 +342,110 @@
             return { code: `I${sockets}${gen}`, model, specs, qty };
         }
 
-        // Определение дисковых корзин (по шасси)
+        // Определение дисковых корзин (по описанию шасси)
         function detectDiskBays(components) {
             const chassis = components.find(c => c.type === 'chassis');
-            if (!chassis) return { code: 'DM', baysText: '8x 3.5"' };
-            const text = (chassis.sku + ' ' + chassis.desc).toLowerCase();
+            if (!chassis) return { code: 'CM', baysText: '', bays: 12, size: '2.5"' };
 
-            // Ищем количество bays в описании шасси
-            const bayMatch = text.match(/(\d+)\s*x\s*(3\.5|2\.5|lff|sff)/i) ||
-                             text.match(/up\s*to\s*(\d+)\s*x/i) ||
-                             text.match(/(\d+)\s*(?:bay|slot|hdd|ssd)/i);
+            const desc = chassis.sku + ' ' + chassis.desc;
 
-            let bays = 8;
-            let size = '3.5"';
+            // ----------------------------------------------------------------
+            // ШАГ 1: Разбиваем описание по '+' и ищем группы вида NxSFF/NxLFF
+            // ----------------------------------------------------------------
+            const parts = desc.split(/\s*\+\s*/);
+            const groups = [];
 
-            if (bayMatch) {
-                bays = parseInt(bayMatch[1]);
-                if (bayMatch[2]) {
-                    size = bayMatch[2].includes('2.5') || bayMatch[2].toLowerCase() === 'sff' ? '2.5"' : '3.5"';
+            parts.forEach(part => {
+                const m = part.match(/(\d+)\s*x\s*(sff|lff|3\.5["\s]?|2\.5["\s]?)/i);
+                if (m) {
+                    const count = parseInt(m[1]);
+                    const t = part.toLowerCase();
+                    groups.push({
+                        count,
+                        supportsNvme: /nvme/i.test(t),
+                        supportsSata: /sata/i.test(t),
+                        supportsSas:  /sas/i.test(t),
+                        sizeIsSmall:  /sff|2\.5/i.test(m[0])
+                    });
+                }
+            });
+
+            // Если разбивка по '+' ничего не дала — прямой поиск всех вхождений
+            if (groups.length === 0) {
+                const re = /(\d+)\s*x\s*(sff|lff|3\.5["]?|2\.5["]?)/gi;
+                let m2;
+                while ((m2 = re.exec(desc)) !== null) {
+                    const count = parseInt(m2[1]);
+                    const snip = desc.substring(m2.index, m2.index + 60).toLowerCase();
+                    groups.push({
+                        count,
+                        supportsNvme: /nvme/i.test(snip),
+                        supportsSata: /sata/i.test(snip),
+                        supportsSas:  /sas/i.test(snip),
+                        sizeIsSmall:  /sff|2\.5/i.test(m2[0])
+                    });
                 }
             }
 
-            // Определяем тип дисков из конфигурации
-            const storages = components.filter(c => c.type === 'storage');
-            const subtypes = new Set(storages.map(s => s.subtype).filter(Boolean));
-            const hasNvme = subtypes.has('nvme') || subtypes.has('m2');
-            const hasSata = subtypes.has('sata_hdd') || subtypes.has('sata_ssd');
-            const hasSas = subtypes.has('sas_hdd') || subtypes.has('sas_ssd');
+            // ----------------------------------------------------------------
+            // ШАГ 2: Исключаем «задние» корзины
+            // Правило: последняя группа ≤ 4 корзин без поддержки NVMe —
+            // это задний опциональный отсек, не учитывается в классификации
+            // ----------------------------------------------------------------
+            let mainGroups = [...groups];
+            if (mainGroups.length > 1) {
+                const last = mainGroups[mainGroups.length - 1];
+                if (last.count <= 4 && !last.supportsNvme) {
+                    mainGroups = mainGroups.slice(0, -1);
+                }
+            }
 
-            let diskTypeCode = 'M'; // M = Mixed/Hybrid по умолчанию
-            if (hasNvme && !hasSata && !hasSas) diskTypeCode = 'N';
-            else if (hasSata && !hasSas && !hasNvme) diskTypeCode = 'S';
-            else if (hasSas && !hasSata && !hasNvme) diskTypeCode = 'A';
+            // ----------------------------------------------------------------
+            // ШАГ 3: Суммируем корзины и определяем тип дисков по шасси
+            // ----------------------------------------------------------------
+            let mainBays = mainGroups.reduce((s, g) => s + g.count, 0);
 
-            // Код: C для 12 bays, D для 4-8, S для 24+
-            let bayCode = 'D';
-            if (bays >= 24) bayCode = 'S';
-            else if (bays >= 12) bayCode = 'C';
-            else if (bays <= 4) bayCode = 'D';
+            if (mainBays === 0) {
+                // Запасной поиск
+                const fb = desc.match(/(?:up\s+to\s+)?(\d+)\s*(?:x\s*)?(?:bay|drive|hdd|ssd)/i);
+                mainBays = fb ? parseInt(fb[1]) : 8;
+            }
+
+            let diskTypeCode;
+            if (mainGroups.length > 0) {
+                const anyNvme = mainGroups.some(g => g.supportsNvme);
+                const anySata = mainGroups.some(g => g.supportsSata || g.supportsSas);
+                if      (anyNvme && anySata) diskTypeCode = 'M'; // Смешанная (NVMe + SATA/SAS)
+                else if (anyNvme)            diskTypeCode = 'N'; // Только NVMe
+                else                         diskTypeCode = 'S'; // SATA/SAS
+            } else {
+                // Нет чётких групп — читаем общий текст
+                const t = desc.toLowerCase();
+                const nv = /nvme/i.test(t);
+                const sa = /sata|sas/i.test(t);
+                diskTypeCode = (nv && sa) ? 'M' : nv ? 'N' : 'S';
+            }
+
+            // ----------------------------------------------------------------
+            // ШАГ 4: Код количества корзин по PN.xlsx
+            // C≤12, D≤16, E≤24, F≤36, G≤48, H≤60
+            // ----------------------------------------------------------------
+            function pickBayCode(n) {
+                if (n <= 12) return 'C';
+                if (n <= 16) return 'D';
+                if (n <= 24) return 'E';
+                if (n <= 36) return 'F';
+                if (n <= 48) return 'G';
+                return 'H';
+            }
+
+            const bayCode = pickBayCode(mainBays);
+            const size = mainGroups.some(g => g.sizeIsSmall) || /sff|2\.5/i.test(desc) ? '2.5"' : '3.5"';
 
             return {
-                code: `${bayCode}${diskTypeCode}`,
-                baysText: `${bays}x ${size}`,
-                bays,
+                code:     `${bayCode}${diskTypeCode}`,
+                baysText: `${mainBays}x ${size}`,
+                bays:     mainBays,
                 size
             };
         }
