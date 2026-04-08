@@ -362,34 +362,62 @@
             const groups = [];
 
             parts.forEach(part => {
-                const m = part.match(/(\d+)\s*x\s*(sff|lff|3\.5["\s]?|2\.5["\s]?)/i);
+                // Убираем скобочные пояснения — описания коннекторов:
+                // напр., "(2x miniSASHD (SFF-8643) / 2x SlimSASx8)" — не являются корзинами
+                const clean = part.replace(/\(.*\)/g, '').trim();
+
+                // Паттерн 1: стандартное обозначение форм-фактора: "4x SFF", "4x LFF", "4x 3.5"", "4x 2.5""
+                const m1 = clean.match(/(\d+)\s*x\s*(sff|lff|3\.5["\s]?|2\.5["\s]?)/i);
+                // Паттерн 2: через тип интерфейса + слово "bays": "4x SAS/SATA/NVMe HS bays"
+                const m2 = !m1 ? clean.match(/(\d+)\s*x\s*(?:[a-z0-9.\/]+\s+)*(?:hs\s+)?bays?/i) : null;
+
+                const m = m1 || m2;
                 if (m) {
                     const count = parseInt(m[1]);
-                    const t = part.toLowerCase();
+                    const t = clean.toLowerCase();
                     groups.push({
                         count,
                         supportsNvme: /nvme/i.test(t),
                         supportsSata: /sata/i.test(t),
                         supportsSas:  /sas/i.test(t),
-                        sizeIsSmall:  /sff|2\.5/i.test(m[0])
+                        // sizeIsSmall: SFF/2.5" явно, или NVMe без указания форм-фактора
+                        sizeIsSmall: /sff|2\.5/i.test(t) || (/nvme/i.test(t) && !(/lff|3\.5/i.test(t)))
                     });
                 }
             });
 
             // Если разбивка по '+' ничего не дала — прямой поиск всех вхождений
             if (groups.length === 0) {
-                const re = /(\d+)\s*x\s*(sff|lff|3\.5["]?|2\.5["]?)/gi;
-                let m2;
-                while ((m2 = re.exec(desc)) !== null) {
-                    const count = parseInt(m2[1]);
-                    const snip = desc.substring(m2.index, m2.index + 60).toLowerCase();
+                // Сначала снимаем скобки из полного описания
+                const descClean = desc.replace(/\(.*?\)/g, '');
+                // Паттерн 1
+                const re1 = /(\d+)\s*x\s*(sff|lff|3\.5["]?|2\.5["]?)/gi;
+                let mm;
+                while ((mm = re1.exec(descClean)) !== null) {
+                    const count = parseInt(mm[1]);
+                    const snip = descClean.substring(mm.index, mm.index + 60).toLowerCase();
                     groups.push({
                         count,
                         supportsNvme: /nvme/i.test(snip),
                         supportsSata: /sata/i.test(snip),
                         supportsSas:  /sas/i.test(snip),
-                        sizeIsSmall:  /sff|2\.5/i.test(m2[0])
+                        sizeIsSmall:  /sff|2\.5/i.test(mm[0])
                     });
+                }
+                // Паттерн 2 (если паттерн 1 тоже не дал результата)
+                if (groups.length === 0) {
+                    const re2 = /(\d+)\s*x\s*(?:[a-z0-9.\/]+\s+)*(?:hs\s+)?bays?/gi;
+                    while ((mm = re2.exec(descClean)) !== null) {
+                        const count = parseInt(mm[1]);
+                        const snip = descClean.substring(mm.index, mm.index + 60).toLowerCase();
+                        groups.push({
+                            count,
+                            supportsNvme: /nvme/i.test(snip),
+                            supportsSata: /sata/i.test(snip),
+                            supportsSas:  /sas/i.test(snip),
+                            sizeIsSmall:  /nvme/i.test(snip)
+                        });
+                    }
                 }
             }
 
