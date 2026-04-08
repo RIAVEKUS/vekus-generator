@@ -114,6 +114,7 @@
             { value: 'raid', label: 'Контроллер дисковых массивов' },
             { value: 'gpu', label: 'GPU' },
             { value: 'psu', label: 'Блок питания' },
+            { value: 'software', label: 'ПО' },
             { value: 'other', label: 'Прочее' }
         ];
 
@@ -542,17 +543,29 @@
 
         // Определение ПО
         function detectSoftware(components) {
+            const swItems = components.filter(c => c.type === 'software');
             const others = components.filter(c => c.type === 'other');
             const sw = [];
-            others.forEach(o => {
+
+            // ПО из типа "ПО"
+            swItems.forEach(o => {
                 const text = (o.desc || '').toLowerCase();
-                if (text.includes('astra') || text.includes('linux')) sw.push('Astra Linux');
+                if (text.includes('astra') && text.includes('смоленск')) sw.push('Astra Linux Special Edition');
+                else if (text.includes('astra') || text.includes('linux')) sw.push('Astra Linux');
                 else if (text.includes('kaspersky') || text.includes('каспер')) sw.push('Kaspersky');
-                else if (text.includes('win') && text.includes('pro')) sw.push('Win11 Pro');
+                else if (text.includes('win') && text.includes('11') && text.includes('pro')) sw.push('Win11 Pro');
+                else if (text.includes('win') && text.includes('10') && text.includes('pro')) sw.push('Win10 Pro');
                 else if (text.includes('win') && text.includes('server')) sw.push('Win Server');
-                else if (text.includes('monitor') || text.includes('монитор')) sw.push(o.desc);
-                else sw.push(o.desc);
+                else if (text.includes('dallas') || text.includes('dltbc')) sw.push('Dallas Lock');
+                else if (text.includes('redos') || text.includes('red os') || text.includes('ред ос')) sw.push('РЕД ОС');
+                else sw.push(o.desc || o.sku);
             });
+
+            // Прочее (мониторы, кабели и т.д.)
+            others.forEach(o => {
+                sw.push(o.desc || o.sku);
+            });
+
             return sw;
         }
 
