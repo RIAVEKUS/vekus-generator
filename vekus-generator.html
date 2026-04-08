@@ -42,6 +42,10 @@
         .btn-clear:hover { background: #ffe69c; }
         .btn-import { background: #e6f4ea; color: #1e7e34; }
         .btn-import:hover { background: #c8e6c9; }
+        .btn-template { background: #f3e5f5; color: #6a1b9a; }
+        .btn-template:hover { background: #e1bee7; }
+        .btn-copy-xl { background: #e8f5e9; color: #1b5e20; margin-top: 8px; width: 100%; padding: 12px; font-size: 14px; justify-content: center; }
+        .btn-copy-xl:hover { background: #c8e6c9; }
         .import-hint { font-size: 12px; color: #888; margin-top: 6px; }
 
         /* Результаты */
@@ -91,6 +95,7 @@
             <button class="btn btn-add" onclick="addRow()" style="margin-bottom: 0;">+ Добавить комплектующую</button>
             <button class="btn btn-import" onclick="document.getElementById('excelFileInput').click()">↥ Импорт из Excel</button>
             <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="importFromExcel(event)">
+            <button class="btn btn-template" onclick="downloadTemplate()">&#8615; Шаблон Excel</button>
             <button class="btn btn-clear" onclick="clearForm()">Очистить форму</button>
         </div>
         <p class="import-hint">Формат Excel: колонки — Тип, Подтип, Артикул (или PN / Part Number), Описание (или Description / Наименование), Кол-во (или Qty). Тип можно не указывать — будет определён автоматически.</p>
@@ -104,6 +109,7 @@
             <div id="towerNote" class="tower-note"></div>
             <div id="parseInfo" class="parse-info"></div>
             <button class="btn btn-copy" onclick="copyResults()">Копировать в буфер</button>
+            <button class="btn btn-copy-xl" onclick="copyForExcel()">Скопировать для Excel (Артикул + Описание — две ячейки)</button>
         </div>
     </div>
 
@@ -923,6 +929,89 @@
         }
 
         // =====================================================
+        // ШАБЛОН EXCEL
+        // =====================================================
+        function downloadTemplate() {
+            const wb = XLSX.utils.book_new();
+
+            // Лист 1: шаблон для заполнения
+            const tplRows = [
+                ['Тип', 'Подтип', 'Артикул', 'Описание', 'Кол-во'],
+                // примеры
+                ['Шасси', '',
+                 'R283-S98-AAJ2',
+                 'Gigabyte Server Platform R283-S98 / 2U / 2xIntel (Gen 4/5) / 32xDIMM / 8xSFF NVMe/SATA/SAS + 16xSFF SATA/SAS + 2xSFF SATA/SAS / 2x2000W / Rails / 1Y', 1],
+                ['Процессор', '',
+                 'CD8069704338002',
+                 'Intel Xeon Gold 6348 2.60GHz / 42MB / 28cores / TDP 235W / LGA4189 Ice Lake', 2],
+                ['Память', '',
+                 'MTA18ASF4G72PZ-3G2R',
+                 'Micron 32GB DDR4-3200 ECC RDIMM 2Rx4 PC4-25600R', 8],
+                ['Накопитель', 'NVMe',
+                 'SSDPE2KX010T8',
+                 'Intel SSD D7-P4510 1TB NVMe U.2 PCIe 3.1 x4', 4],
+                ['Накопитель', 'SAS SSD',
+                 'KPM61VUG1T60',
+                 'KIOXIA PM6 1.6TB SAS SSD 2.5" 3DWPD', 2],
+                ['Контроллер', '',
+                 '05-50077-00',
+                 'Broadcom RAID Controller 9560-16i SGL PCIe 4.0 x8 LP, 16port, 8GB Cache, SAS/SATA/NVMe 12G', 1],
+                ['Аксессуары', '',
+                 'AKIT-R283',
+                 'Rail Kit for Gigabyte R283 rack servers', 1],
+                ['Сетевой адаптер', '',
+                 'MCX512A-ACUT',
+                 'Mellanox ConnectX-5 EN 25GbE dual-port SFP28, PCIe3.0 x8, UEFI', 1],
+                ['Тип БП', '', '',
+                 '2x 2000W 80+ Platinum Hot-Swap Power Supply', 1],
+                ['Операционная Система', '', 'OS-ASTRA-SE',
+                 'Astra Linux Special Edition 1.7 Смоленск', 1],
+            ];
+
+            const ws = XLSX.utils.aoa_to_sheet(tplRows);
+
+            // Ширина столбцов
+            ws['!cols'] = [
+                { wch: 22 },  // Тип
+                { wch: 14 },  // Подтип
+                { wch: 22 },  // Артикул
+                { wch: 80 },  // Описание
+                { wch: 8 },   // Кол-во
+            ];
+
+            // Перенос текста в ячейках столбца Описание
+            for (let r = 1; r < tplRows.length; r++) {
+                const cell = ws[XLSX.utils.encode_cell({ r, c: 3 })];
+                if (cell) cell.s = { alignment: { wrapText: true } };
+            }
+
+            XLSX.utils.book_append_sheet(wb, ws, 'Конфигурация');
+
+            // Лист 2: справочник типов
+            const refRows = [
+                ['Тип', 'Допустимые значения для поля Подтип (только для Накопитель)'],
+                ['Шасси', '—'],
+                ['Процессор', '—'],
+                ['Кулер', '—'],
+                ['Память', '—'],
+                ['Накопитель', 'NVMe │ SSD SATA │ SSD SAS │ SATA HDD │ SAS HDD │ M.2'],
+                ['Контроллер', '—'],
+                ['Аксессуары', '—'],
+                ['Сетевой адаптер', '—'],
+                ['GPU', '—'],
+                ['Тип БП', '—'],
+                ['Операционная Система', '—'],
+                ['Прикладное ПО', '—'],
+                ['Прочее', '—'],
+            ];
+            const wsRef = XLSX.utils.aoa_to_sheet(refRows);
+            wsRef['!cols'] = [{ wch: 25 }, { wch: 50 }];
+            XLSX.utils.book_append_sheet(wb, wsRef, 'Справочник');
+
+            XLSX.writeFile(wb, 'vekus-template.xlsx');
+        }
+
+        // =====================================================
         // КОПИРОВАНИЕ
         // =====================================================
         function copyResults() {
@@ -935,6 +1024,26 @@
                 btn.textContent = 'Скопировано';
                 btn.style.background = '#1a73e8';
                 setTimeout(() => { btn.textContent = origText; btn.style.background = '#28a745'; }, 1500);
+            });
+        }
+
+        // Копирование для Excel: артикул и описание разделены табуляцией —
+        // при вставке Ctrl+V в Excel попадут в две соседние ячейки
+        function copyForExcel() {
+            const pnCode = document.getElementById('pnCode').textContent.trim();
+            const description = document.getElementById('description').textContent.trim();
+            const tsv = `${pnCode}\t${description}`;
+            navigator.clipboard.writeText(tsv).then(() => {
+                const btn = document.querySelector('.btn-copy-xl');
+                const origText = btn.textContent;
+                btn.textContent = 'Скопировано — вставьте в Excel';
+                btn.style.background = '#388e3c';
+                btn.style.color = 'white';
+                setTimeout(() => {
+                    btn.textContent = origText;
+                    btn.style.background = '';
+                    btn.style.color = '';
+                }, 2000);
             });
         }
 
