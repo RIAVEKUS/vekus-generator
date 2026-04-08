@@ -110,11 +110,13 @@
             { value: 'cooler', label: 'Кулер' },
             { value: 'ram', label: 'Память' },
             { value: 'storage', label: 'Накопитель' },
+            { value: 'raid', label: 'Контроллер' },
+            { value: 'accessories', label: 'Аксессуары' },
             { value: 'nic', label: 'Сетевой адаптер' },
-            { value: 'raid', label: 'Контроллер дисковых массивов' },
             { value: 'gpu', label: 'GPU' },
-            { value: 'psu', label: 'Блок питания' },
-            { value: 'software', label: 'ПО' },
+            { value: 'psu', label: 'Тип БП' },
+            { value: 'os', label: 'Операционная Система' },
+            { value: 'software', label: 'Прикладное ПО' },
             { value: 'other', label: 'Прочее' }
         ];
 
@@ -494,8 +496,12 @@
 
             model = 'RAID ' + model;
 
-            // Ищем BBU/CacheVault
-            const hasBbu = desc.toLowerCase().includes('bbu') || desc.toLowerCase().includes('cachevault') || desc.toLowerCase().includes('btr');
+            // Ищем BBU/CacheVault — в описании контроллера или в аксессуарах (батарея, резервное питание)
+            const accBbu = components.filter(c => c.type === 'accessories').some(a => {
+                const t = (a.desc || a.sku || '').toLowerCase();
+                return t.includes('bbu') || t.includes('батарея') || t.includes('battery') || t.includes('cachevault') || t.includes('резервного питания');
+            });
+            const hasBbu = desc.toLowerCase().includes('bbu') || desc.toLowerCase().includes('cachevault') || desc.toLowerCase().includes('btr') || accBbu;
 
             return {
                 text: model + (hasBbu ? '/BBU' : ''),
@@ -543,11 +549,10 @@
 
         // Определение ПО
         function detectSoftware(components) {
-            const swItems = components.filter(c => c.type === 'software');
-            const others = components.filter(c => c.type === 'other');
+            // Обрабатываем оба типа: 'os' (Операционная Система) и 'software' (Прикладное ПО)
+            const swItems = components.filter(c => c.type === 'software' || c.type === 'os');
             const sw = [];
 
-            // ПО из типа "ПО"
             swItems.forEach(o => {
                 const text = (o.desc || '').toLowerCase();
                 if (text.includes('astra') && text.includes('смоленск')) sw.push('Astra Linux Special Edition');
@@ -561,11 +566,7 @@
                 else sw.push(o.desc || o.sku);
             });
 
-            // Прочее (мониторы, кабели и т.д.)
-            others.forEach(o => {
-                sw.push(o.desc || o.sku);
-            });
-
+            // Тип 'Прочее' намеренно не добавляется в итоговое описание
             return sw;
         }
 
