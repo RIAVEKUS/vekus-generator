@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vekus Server PN Generator v2</title>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="cpu-data.js"></script>
     <style>
         * { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; box-sizing: border-box; }
         body { max-width: 1400px; margin: 0 auto; padding: 20px; background: #f0f2f5; }
@@ -47,6 +48,13 @@
         .btn-copy-xl { background: #e8f5e9; color: #1b5e20; margin-top: 8px; width: 100%; padding: 12px; font-size: 14px; justify-content: center; }
         .btn-copy-xl:hover { background: #c8e6c9; }
         .import-hint { font-size: 12px; color: #888; margin-top: 6px; }
+        /* Валидация CPU */
+        .cpu-validation { margin-top: 16px; }
+        .cpu-validation h4 { font-size: 14px; color: #555; margin-bottom: 6px; }
+        .cv-err  { background: #f8d7da; border-left: 4px solid #dc3545; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+        .cv-warn { background: #fff3cd; border-left: 4px solid #ffc107; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+        .cv-ok   { background: #d4edda; border-left: 4px solid #28a745; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+        .cv-info { background: #e3f2fd; border-left: 4px solid #1a73e8; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
 
         /* Результаты */
         .results { background: #f8f9fa; padding: 24px; border-radius: 12px; border-left: 5px solid #1a73e8; margin-top: 20px; display: none; }
@@ -108,6 +116,7 @@
             <div id="description" class="description"></div>
             <div id="towerNote" class="tower-note"></div>
             <div id="parseInfo" class="parse-info"></div>
+            <div id="cpuValidation" class="cpu-validation" style="display:none"></div>
             <button class="btn btn-copy" onclick="copyResults()">Копировать в буфер</button>
             <button class="btn btn-copy-xl" onclick="copyForExcel()">Скопировать для Excel (Артикул + Описание — две ячейки)</button>
         </div>
@@ -808,6 +817,17 @@
             `;
             parseInfo.style.display = 'block';
 
+            // Валидация CPU: сокет, TDP, кол-во сокетов
+            applyCpuQtyConstraints(components);
+            const cpuValHtml = validateCpuCompatibility(components);
+            const cpuValDiv  = document.getElementById('cpuValidation');
+            if (cpuValHtml) {
+                cpuValDiv.innerHTML = cpuValHtml;
+                cpuValDiv.style.display = 'block';
+            } else {
+                cpuValDiv.style.display = 'none';
+            }
+
             document.getElementById('results').style.display = 'block';
             document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
         }
@@ -1034,6 +1054,167 @@
             wb.Workbook.Sheets[1] = { Hidden: 1 };
 
             XLSX.writeFile(wb, 'vekus-template.xlsx');
+        }
+
+        // =====================================================
+        // ВАЛИДАЦИЯ ПРОЦЕССОРОВ (Intel Xeon)
+        // =====================================================
+
+        // 1. Определение сокета, кол-ва сокетов и макс. TDP по описанию шасси
+        function detectChassisSocket(components) {
+            const chassis = components.find(c => c.type === 'chassis');
+            if (!chassis) return { socket: null, sockets: 2, maxTdp: null };
+
+            const text = chassis.sku + ' ' + chassis.desc;
+
+            // Тип сокета
+            let socket = null;
+            if (/fclga4710|lga4710/i.test(text))      socket = 'FCLGA4710';
+            else if (/fclga4677|lga4677/i.test(text)) socket = 'FCLGA4677';
+            else if (/fclga4189|lga4189/i.test(text)) socket = 'FCLGA4189';
+            else if (/fclga3647|lga3647/i.test(text)) socket = 'FCLGA3647';
+
+            // Кол-во сокетов
+            // Шаблоны: "2xIntel", "2x CPU", "2xLGA", "2x socket", "2S", "dual socket"
+            let sockets = 2;
+            const sc = text.match(/(\d+)\s*[x×\*]\s*(?:intel|amd|epyc|lga|fclga|socket|cpu|processor)/i)
+                     || text.match(/\b(\d)[Ss]\b/)
+                     || text.match(/(\d)\s*-\s*socket/i);
+            if (sc) {
+                sockets = parseInt(sc[1]);
+            } else if (/dual[\s\-]?socket|2\s*[x×\*]\s*socket/i.test(text)) {
+                sockets = 2;
+            } else if (/single[\s\-]?socket|1\s*[x×\*]\s*socket|\b1[Ss]\b/.test(text)) {
+                sockets = 1;
+            }
+
+            // Макс. TDP из описания (если платформа указывает)
+            // Напр.: "CPU TDP up to 205W", "Max TDP 250W", "TDP ≤ 270W"
+            let maxTdp = null;
+            const tdpMatch = text.match(/(?:cpu\s+tdp|max(?:\.?|imum)?\s+tdp|tdp\s+(?:up\s+to|max|limit|≤))\s*[:\s]*(\d+)\s*[Ww]/i)
+                          || text.match(/(\d{2,3})\s*[Ww]\s*(?:tdp|cpu\s+tdp)/i);
+            if (tdpMatch) maxTdp = parseInt(tdpMatch[1]);
+
+            return { socket, sockets, maxTdp };
+        }
+
+        // 2. Поиск процессора в базе XEON_CPU_DB по описанию/артикулу
+        function lookupCpuInDb(desc, sku) {
+            const text = (desc || '') + ' ' + (sku || '');
+
+            // Прямое упоминание номера после Platinum/Gold/Silver/Bronze/MAX/Xeon
+            const modelMatch = text.match(/\b(?:platinum|gold|silver|bronze|max)\s+([\d]{4}[\w\+]*)\b/i)
+                            || text.match(/\bxeon\s+6?\s+([0-9]{4}[\w\+]*)\b/i);
+            if (modelMatch) {
+                const m = modelMatch[1];
+                if (XEON_CPU_DB[m])         return { modelNum: m, ...XEON_CPU_DB[m] };
+                if (XEON_CPU_DB[m + '+'])   return { modelNum: m + '+', ...XEON_CPU_DB[m + '+'] };
+                // Убираем буквенные суффиксы (R, T, Y и т.д.), чтобы найти базовую модель
+                const base = m.replace(/[a-z]+$/i, '');
+                if (XEON_CPU_DB[base])      return { modelNum: base, ...XEON_CPU_DB[base] };
+            }
+
+            // Фаллбэк: перебор всех значений, сортировка по длине (match длинных ключей первым)
+            const keys = Object.keys(XEON_CPU_DB).sort((a, b) => b.length - a.length);
+            for (const key of keys) {
+                const escaped = key.replace(/\+/g, '\\+').replace(/\./g, '\\.');
+                if (new RegExp('\\b' + escaped + '\\b', 'i').test(text)) {
+                    return { modelNum: key, ...XEON_CPU_DB[key] };
+                }
+            }
+            return null;
+        }
+
+        // 3. Полная валидация всех процессоров в конфигурации
+        function validateCpuCompatibility(components) {
+            if (typeof XEON_CPU_DB === 'undefined') return '';
+
+            const chassis = detectChassisSocket(components);
+            const cpuRows = components.filter(c => c.type === 'cpu');
+            if (cpuRows.length === 0) return '';
+
+            let html = '<h4>Проверка совместимости CPU</h4>';
+            let hasAny = false;
+
+            cpuRows.forEach(cpu => {
+                const qty = parseInt(cpu.qty) || 1;
+                const label = cpu.sku || cpu.desc || 'неизвестный';
+                const info = lookupCpuInDb(cpu.desc, cpu.sku);
+
+                if (!info) {
+                    html += `<div class="cv-info">&#128269; ${label} — не найден в базе данных</div>`;
+                    hasAny = true;
+                    return;
+                }
+
+                const genName = { 1:'Gen1 Skylake', 2:'Gen2 Cascade Lake', 3:'Gen3 Ice Lake',
+                                  4:'Gen4 Sapphire Rapids', 5:'Gen5 Emerald Rapids',
+                                  6:'Xeon 6 E-core', 7:'Xeon 6 P-core' }[info.gen] || '';
+                const cpuFull = `Xeon ${info.tier} ${info.modelNum} (${info.cores}c, ${info.base}-${info.turbo}ГГц, ${info.cache}МБ, ${info.tdp}Вт, ${info.socket}, ${genName})`;
+
+                // Совместимость сокета
+                if (chassis.socket && info.socket !== chassis.socket) {
+                    html += `<div class="cv-err">❌ ${cpuFull}<br>→ Несовместимый сокет: CPU требует <strong>${info.socket}</strong>, платформа имеет <strong>${chassis.socket}</strong></div>`;
+                } else if (chassis.socket) {
+                    html += `<div class="cv-ok">✅ ${cpuFull}<br>→ Сокет совместим (<strong>${info.socket}</strong>)</div>`;
+                } else {
+                    html += `<div class="cv-info">&#128270; ${cpuFull} — сокет платформы не определён</div>`;
+                }
+
+                // TDP
+                if (chassis.maxTdp) {
+                    if (info.tdp > chassis.maxTdp) {
+                        html += `<div class="cv-err">❌ TDP превышен: CPU ${info.tdp}Вт > лимит платформы ${chassis.maxTdp}Вт</div>`;
+                    } else {
+                        html += `<div class="cv-ok">✅ TDP в норме: ${info.tdp}Вт ≤ ${chassis.maxTdp}Вт</div>`;
+                    }
+                } else {
+                    html += `<div class="cv-info">· TDP CPU: <strong>${info.tdp}Вт</strong> (лимит платформы не указан)</div>`;
+                }
+
+                // Кол-во сокетов
+                if (info.s1only && qty > 1) {
+                    html += `<div class="cv-err">❌ ${info.modelNum} — одно-сокетный CPU (1S only), указано ${qty} шт. → макс. 1</div>`;
+                } else if (chassis.sockets === 1 && qty > 1) {
+                    html += `<div class="cv-err">❌ Платформа одно-сокетная (1S), указано ${qty} шт. CPU → макс. 1</div>`;
+                } else if (qty > chassis.sockets) {
+                    html += `<div class="cv-warn">⚠️ Кол-во CPU (${qty}) превышает число сокетов платформы (${chassis.sockets})</div>`;
+                } else if (info.s1only) {
+                    html += `<div class="cv-warn">⚠️ ${info.modelNum} — одно-сокетный (1S only)</div>`;
+                } else {
+                    html += `<div class="cv-ok">✅ Кол-во: ${qty} шт. (платформа ${chassis.sockets}-сокетная)</div>`;
+                }
+
+                hasAny = true;
+            });
+
+            return hasAny ? html : '';
+        }
+
+        // 4. Ограничение поля Qty для CPU-строк на основе данных шасси и базы
+        function applyCpuQtyConstraints(components) {
+            const chassis = detectChassisSocket(components);
+            const tbody = document.getElementById('configBody');
+            if (!tbody) return;
+
+            Array.from(tbody.rows).forEach(row => {
+                const typeEl = row.querySelector('[data-field="type"]');
+                const qtyEl  = row.querySelector('[data-field="qty"]');
+                if (!typeEl || !qtyEl) return;
+                if (typeEl.value !== 'cpu') return;
+
+                const descEl = row.querySelector('[data-field="desc"]');
+                const skuEl  = row.querySelector('[data-field="sku"]');
+                const info   = lookupCpuInDb(
+                    descEl ? descEl.value : '',
+                    skuEl  ? skuEl.value  : ''
+                );
+
+                // Макс. кол-во: 1 если s1only или платформа 1S, иначе — число сокетов
+                const maxQty = (info && info.s1only) || chassis.sockets === 1 ? 1 : chassis.sockets;
+                qtyEl.max = maxQty;
+                if (parseInt(qtyEl.value) > maxQty) qtyEl.value = maxQty;
+            });
         }
 
         // =====================================================
