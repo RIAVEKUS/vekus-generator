@@ -387,8 +387,27 @@
 
             const cpu = cpus[0];
             const text = (cpu.sku + ' ' + cpu.desc).toLowerCase();
-            const qty = cpus.reduce((s, c) => s + c.qty, 0);
-            const sockets = qty >= 2 ? '2' : '1';
+
+            // Кол-во установленных (для описания: "2x Xeon Gold ...")
+            const qty = cpus.reduce((s, c) => s + (parseInt(c.qty) || 1), 0);
+
+            // Кол-во сокетов берётся ИЗ ОПИСАНИЯ ШАССИ (характеристика платформы),
+            // а НЕ из кол-ва введённых ЦПУ
+            let sockets = '2'; // по умолчанию для rack-серверов
+            const chassisComp = components.find(c => c.type === 'chassis');
+            if (chassisComp) {
+                const ct = chassisComp.sku + ' ' + chassisComp.desc;
+                const sc = ct.match(/(\d+)\s*[x×*]\s*(?:intel|amd|epyc|lga|fclga|socket|cpu|processor)/i)
+                         || ct.match(/\b(\d)[Ss]\b/)
+                         || ct.match(/(\d)\s*-\s*socket/i);
+                if (sc) {
+                    sockets = sc[1];
+                } else if (/dual[\s-]?socket/i.test(ct)) {
+                    sockets = '2';
+                } else if (/single[\s-]?socket|\b1S\b/i.test(ct)) {
+                    sockets = '1';
+                }
+            }
 
             // Определяем поколение
             // Шаг 1: XEON_CPU_DB — авторитетный источник (288 моделей)
