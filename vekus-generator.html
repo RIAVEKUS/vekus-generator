@@ -128,6 +128,8 @@
         // =====================================================
         const COMPONENT_TYPES = [
             { value: 'chassis', label: 'Шасси' },
+            { value: 'case',    label: 'Корпус' },
+            { value: 'mb',      label: 'Материнская плата' },
             { value: 'cpu', label: 'Процессор' },
             { value: 'cooler', label: 'Кулер' },
             { value: 'ram', label: 'Память' },
@@ -534,28 +536,45 @@
         // Определение типа PSU
         function detectPsu(components) {
             const psus = components.filter(c => c.type === 'psu');
+
+            // Если блоки питания не введены — читаем из описания шасси
             if (psus.length === 0) {
-                // Попробуем найти PSU в описании шасси
                 const chassis = components.find(c => c.type === 'chassis');
                 if (chassis) {
-                    const text = (chassis.desc || '').toLowerCase();
-                    if (text.includes('redundant') || text.includes('1+1') || text.includes('2x')) return { code: 'H', text: '' };
+                    const ct = (chassis.sku + ' ' + chassis.desc);
+                    // Мощность из шасси
+                    const wm = ct.match(/(\d+)\s*[x×]\s*(\d{3,4})\s*[Ww]/i)
+                            || ct.match(/(\d{3,4})\s*[Ww]/i);
+                    const watts = wm ? (wm[2] || wm[1]) : '';
+                    const count = wm && wm[2] ? parseInt(wm[1]) : 1;
+                    // (N+0) = без резерва
+                    const noRed = /\bN\+0\b/i.test(ct);
+                    if (count >= 4) return { code: 'D4', text: `${count}x${watts}W`, watts };
+                    if (count >= 2) return { code: noRed ? 'D2' : 'H', text: `${count}x${watts}W`, watts };
+                    return { code: 'H', text: watts ? `${watts}W` : '' };
                 }
                 return { code: 'H', text: '' };
             }
 
-            const totalPsu = psus.reduce((s, p) => s + p.qty, 0);
-            const psuText = psus[0].desc || '';
+            // Собираем все описания для проверки N+0
+            const allPsuText = psus.map(p => p.desc || '').join(' ');
+            const totalPsu = psus.reduce((s, p) => s + (parseInt(p.qty) || 1), 0);
+            const psuText  = psus[0].desc || psus[0].sku || '';
 
-            // Извлекаем мощность
-            const wattMatch = psuText.match(/(\d+)\s*W/i);
-            const watts = wattMatch ? wattMatch[1] : '';
+            // Мощность блока питания
+            const wm = psuText.match(/(\d+)\s*[x×]\s*(\d{3,4})\s*[Ww]/i)
+                    || psuText.match(/(\d{3,4})\s*[Ww]/i);
+            const watts = wm ? (wm[2] || wm[1]) : '';
+
+            // (N+0) = явно указано без резервирования
+            const noRedundancy = /\bN\+0\b/i.test(allPsuText);
 
             if (totalPsu >= 4) return { code: 'D4', text: `${totalPsu}x${watts}W`, watts };
             if (totalPsu >= 2) {
-                const isHotswap = psuText.toLowerCase().includes('hot') || psuText.toLowerCase().includes('redundant') || psuText.toLowerCase().includes('1+1');
-                return { code: isHotswap ? 'H' : 'D2', text: `${totalPsu}x${watts}W`, watts };
+                // 2+ БП по умолчанию = резервирование (H), только (N+0) даёт D2
+                return { code: noRedundancy ? 'D2' : 'H', text: `${totalPsu}x${watts}W`, watts };
             }
+            // 1 БП
             return { code: 'F', text: `${watts}W`, watts };
         }
 
@@ -607,12 +626,19 @@
 
             model = 'RAID ' + model;
 
-            // Ищем BBU/CacheVault — в описании контроллера или в аксессуарах (батарея, резервное питание)
-            const accBbu = components.filter(c => c.type === 'accessories').some(a => {
-                const t = (a.desc || a.sku || '').toLowerCase();
-                return t.includes('bbu') || t.includes('батарея') || t.includes('battery') || t.includes('cachevault') || t.includes('резервного питания');
-            });
-            const hasBbu = desc.toLowerCase().includes('bbu') || desc.toLowerCase().includes('cachevault') || desc.toLowerCase().includes('btr') || accBbu;
+            // BBU-маркер: ищем в описании самого контроллера И во всех аксессуарах
+            const BBU_KEYWORDS = [
+                'bbu', 'cachevault', 'cvpm', 'cachevlt', 'btr',
+                'supercap', 'super cap',
+                'battery', 'батарея', 'аккумулятор',
+                'защита данных', 'модуль защит',
+                'data protection module', 'flash module'
+            ];
+            const hasBbuInDesc = BBU_KEYWORDS.some(kw => desc.toLowerCase().includes(kw));
+            const hasBbuInAcc  = components
+                .filter(c => c.type === 'accessories')
+                .some(a => BBU_KEYWORDS.some(kw => (a.desc || a.sku || '').toLowerCase().includes(kw)));
+            const hasBbu = hasBbuInDesc || hasBbuInAcc;
 
             return {
                 text: model + (hasBbu ? '/BBU' : ''),
@@ -702,7 +728,15 @@
                     case 'sas_hdd': typeText = 'SAS HDD'; break;
                     case 'sata_ssd': typeText = 'SATA SSD'; break;
                     case 'sas_ssd': typeText = 'SAS SSD'; break;
-                    case 'nvme': typeText = 'NVMe'; break;
+                    case 'nvme': {
+                        // Определяем тип коннектора из описания
+                        let conn = '';
+                        if (/\bu\.?3\b|u3\b/i.test(desc))           conn = ' U.3';
+                        else if (/\bu\.?2\b|u2\b|sff.?8639/i.test(desc)) conn = ' U.2';
+                        else if (/\bm\.?2\b|ngff/i.test(desc))      conn = ' M.2';
+                        typeText = 'NVMe' + conn;
+                        break;
+                    }
                     case 'm2': typeText = 'SSD M.2'; break;
                     default: typeText = 'HDD';
                 }
@@ -717,10 +751,28 @@
         // ГЕНЕРАЦИЯ АРТИКУЛА И ОПИСАНИЯ
         // =====================================================
         function generateVekusConfig() {
-            const components = readConfiguration();
-            if (components.length === 0) {
+            const rawComponents = readConfiguration();
+            if (rawComponents.length === 0) {
                 alert('Добавьте хотя бы одну комплектующую');
                 return;
+            }
+
+            // Если Корпус + Материнская плата введены без Шасси — мержим в виртуальный шасси
+            let components = rawComponents;
+            if (!rawComponents.find(c => c.type === 'chassis')) {
+                const caseComp = rawComponents.find(c => c.type === 'case');
+                const mbComp   = rawComponents.find(c => c.type === 'mb');
+                if (caseComp || mbComp) {
+                    const virtualChassis = {
+                        type: 'chassis',
+                        sku:  [caseComp?.sku,  mbComp?.sku ].filter(Boolean).join(' / '),
+                        desc: [caseComp?.desc, mbComp?.desc].filter(Boolean).join(' / '),
+                        qty:  1,
+                        _isVirtual: true
+                    };
+                    // Остальные компоненты без исходных корпуса и МП
+                    components = [virtualChassis, ...rawComponents.filter(c => c.type !== 'case' && c.type !== 'mb')];
+                }
             }
 
             // Парсим все компоненты
@@ -843,7 +895,9 @@
         });
         // Дополнительные алиасы
         const TYPE_ALIASES = {
-            'chassis': 'chassis', 'шасси': 'chassis', 'платформа': 'chassis', 'корпус': 'chassis',
+            'chassis': 'chassis', 'шасси': 'chassis', 'платформа': 'chassis',
+            'case': 'case', 'корпус': 'case',
+            'mb': 'mb', 'материнская плата': 'mb', 'материнскаяплата': 'mb', 'motherboard': 'mb', 'мп': 'mb',
             'cpu': 'cpu', 'процессор': 'cpu', 'processor': 'cpu',
             'cooler': 'cooler', 'кулер': 'cooler', 'cooling': 'cooler',
             'ram': 'ram', 'память': 'ram', 'memory': 'ram', 'dimm': 'ram',
