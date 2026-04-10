@@ -639,47 +639,66 @@
 
         // Определение типа PSU
         function detectPsu(components) {
+            // ---------------------------------------------------------
+            // Код БП состоит из двух частей:
+            //   [D2|D4]  — кол-во БП (если > 1)
+            //   [F|H]    — способ монтажа: F=фиксированный, H=Hot-swap
+            //   Примеры: H, F, D2H, D2F, D4H
+            // ---------------------------------------------------------
+
+            // Определяем способ монтажа (H или F) из текста
+            function mountType(text, count) {
+                const t = (text || '').toLowerCase();
+                // Явно фиксированный
+                if (/\bfixed\b|non.?hot|non.?redundant/i.test(t)) return 'F';
+                // Явно hot-swap
+                if (/hot.?swap|hot.?plug|redundant|\b1\+1\b|\b2\+1\b|\b2\+2\b/i.test(t)) return 'H';
+                // Для рак-серверов: 2+ БП по умолчанию hot-swap
+                return count >= 2 ? 'H' : 'F';
+            }
+
+            // Сборка итогового кода
+            function buildCode(count, mount) {
+                if (count >= 4) return `D4${mount}`;
+                if (count >= 2) return `D2${mount}`;
+                return mount; // один БП: просто H или F
+            }
+
             const psus = components.filter(c => c.type === 'psu');
 
-            // Если блоки питания не введены — читаем из описания шасси
+            // БП не введены — читаем из описания шасси
             if (psus.length === 0) {
                 const chassis = components.find(c => c.type === 'chassis');
                 if (chassis) {
-                    const ct = (chassis.sku + ' ' + chassis.desc);
-                    // Мощность из шасси
-                    const wm = ct.match(/(\d+)\s*[x×]\s*(\d{3,4})\s*[Ww]/i)
+                    const ct = chassis.sku + ' ' + chassis.desc;
+                    // "2x2000W", "2 x 2000W", "Redundant 2x1300W" и т.д.
+                    const wm = ct.match(/(\d+)\s*[x×\*]\s*(\d{3,4})\s*[Ww]/i)
                             || ct.match(/(\d{3,4})\s*[Ww]/i);
                     const watts = wm ? (wm[2] || wm[1]) : '';
-                    const count = wm && wm[2] ? parseInt(wm[1]) : 1;
-                    // (N+0) = без резерва
-                    const noRed = /\bN\+0\b/i.test(ct);
-                    if (count >= 4) return { code: 'D4', text: `${count}x${watts}W`, watts };
-                    if (count >= 2) return { code: noRed ? 'D2' : 'H', text: `${count}x${watts}W`, watts };
-                    return { code: 'H', text: watts ? `${watts}W` : '' };
+                    const count = (wm && wm[2]) ? parseInt(wm[1]) : 1;
+                    const mount = mountType(ct, count);
+                    return { code: buildCode(count, mount), text: count > 1 ? `${count}x${watts}W` : `${watts}W`, watts };
                 }
                 return { code: 'H', text: '' };
             }
 
-            // Собираем все описания для проверки N+0
-            const allPsuText = psus.map(p => p.desc || '').join(' ');
-            const totalPsu = psus.reduce((s, p) => s + (parseInt(p.qty) || 1), 0);
-            const psuText  = psus[0].desc || psus[0].sku || '';
+            // БП введены явно
+            const allPsuText = psus.map(p => (p.desc || '') + ' ' + (p.sku || '')).join(' ');
+            const totalPsu  = psus.reduce((s, p) => s + (parseInt(p.qty) || 1), 0);
+            const psuText   = psus[0].desc || psus[0].sku || '';
 
-            // Мощность блока питания
-            const wm = psuText.match(/(\d+)\s*[x×]\s*(\d{3,4})\s*[Ww]/i)
-                    || psuText.match(/(\d{3,4})\s*[Ww]/i);
+            // Мощность
+            const wm    = psuText.match(/(\d+)\s*[x×\*]\s*(\d{3,4})\s*[Ww]/i)
+                       || psuText.match(/(\d{3,4})\s*[Ww]/i);
             const watts = wm ? (wm[2] || wm[1]) : '';
 
-            // (N+0) = явно указано без резервирования
-            const noRedundancy = /\bN\+0\b/i.test(allPsuText);
+            const mount = mountType(allPsuText, totalPsu);
 
-            if (totalPsu >= 4) return { code: 'D4', text: `${totalPsu}x${watts}W`, watts };
-            if (totalPsu >= 2) {
-                // 2+ БП по умолчанию = резервирование (H), только (N+0) даёт D2
-                return { code: noRedundancy ? 'D2' : 'H', text: `${totalPsu}x${watts}W`, watts };
-            }
-            // 1 БП
-            return { code: 'F', text: `${watts}W`, watts };
+            return {
+                code:  buildCode(totalPsu, mount),
+                text:  totalPsu > 1 ? `${totalPsu}x${watts}W` : `${watts}W`,
+                watts
+            };
         }
 
         // Определение GPU для описания
