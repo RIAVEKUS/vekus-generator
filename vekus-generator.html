@@ -769,30 +769,63 @@
         }
 
         // Определение сетевых адаптеров
+        // Формат: [Xx]NxT NIC
+        //   X — кол-во адаптеров (только если > 1)
+        //   N — кол-во портов на адаптере
+        //   T — тип порта (скорость + коннектор)
         function detectNetwork(components) {
             const nics = components.filter(c => c.type === 'nic');
-            if (nics.length === 0) return { lom: '', additional: '' };
+            if (nics.length === 0) return { text: '' };
 
             const parts = [];
+
             nics.forEach(nic => {
                 const desc = nic.desc || '';
-                const qty = nic.qty;
+                const X = parseInt(nic.qty) || 1; // кол-во адаптеров
 
-                // Ищем скорость и тип порта
-                const speedMatch = desc.match(/(\d+)\s*(?:GbE?|Gb\/s)/i);
-                const portMatch = desc.match(/(SFP28|SFP\+|RJ45|QSFP|SFP)/i);
-                const countMatch = desc.match(/(\d+)\s*(?:x|port)/i);
+                // --- Скорость (берём максимальную из упомянутых) ---
+                const speedRe = /(\d+)\s*(?:Gbe?|Gb\/s|Gbps)/gi;
+                const speeds = [];
+                let m;
+                while ((m = speedRe.exec(desc)) !== null) speeds.push(parseInt(m[1]));
+                const speed = speeds.length ? Math.max(...speeds) : 10;
 
-                let portCount = countMatch ? parseInt(countMatch[1]) : 1;
-                let speed = speedMatch ? speedMatch[1] : '10';
-                let portType = portMatch ? portMatch[1] : 'GbE';
+                // --- Тип коннектора (приоритет специфичных) ---
+                let conn = '';
+                if      (/qsfp-?56/i.test(desc))    conn = 'QSFP56';
+                else if (/qsfp-?28/i.test(desc))    conn = 'QSFP28';
+                else if (/qsfp\+|qsfpplus/i.test(desc)) conn = 'QSFP+';
+                else if (/\bqsfp\b/i.test(desc))    conn = 'QSFP';
+                else if (/sfp-?28/i.test(desc))     conn = 'SFP28';
+                else if (/sfp\+|sfpplus/i.test(desc)) conn = 'SFP+';
+                else if (/\bsfp\b/i.test(desc))     conn = 'SFP';
+                else if (/rj-?45/i.test(desc))      conn = 'RJ45';
 
-                if (portType === 'RJ45') portType = 'GbE';
+                // --- Кол-во портов на адаптере (N) ---
+                // Ищем явные паттерны: "dual-port", "4-port", "2x SFP28" и т.д.
+                // Исключаем PCIe "x8"/"x16" — они идут после PCIe/PCI
+                let N = 1;
+                if      (/quad.?port|4.?port/i.test(desc))   N = 4;
+                else if (/dual.?port|2.?port/i.test(desc))   N = 2;
+                else if (/single.?port|1.?port/i.test(desc)) N = 1;
+                else {
+                    // Ищем "Nx SFP/QSFP/RJ/port" — НЕ после "PCIe"
+                    const portRe = /(?<!pcie?\s*)\b(\d)\s*[x×]\s*(?:sfp|qsfp|rj|port|gbe)/i;
+                    const pm = desc.match(portRe);
+                    if (pm) N = parseInt(pm[1]);
+                }
 
-                parts.push(`${portCount > 1 ? portCount + 'x' : ''}${speed}Gb ${portType !== 'GbE' ? portType + ' ' : 'GbE '}NIC`);
+                // --- Сборка строки ---
+                // Формат: [Xx]NxSpeedGbE[ Connector]
+                const xPart    = X > 1 ? `${X}x` : '';
+                const nPart    = `${N}x${speed}GbE`;
+                const connPart = conn ? ` ${conn}` : '';
+
+                parts.push(`${xPart}${nPart}${connPart}`);
             });
 
-            return { text: parts.join('/') };
+            if (!parts.length) return { text: '' };
+            return { text: parts.join('/') + ' NIC' };
         }
 
         // Определение LOM из описания шасси
